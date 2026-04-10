@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>게임 컨트롤러</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; width: 100%; background: #0f0f0f; color: #fff; font-family: -apple-system, sans-serif; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+  #status-bar { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #888; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #444; display: inline-block; margin-right: 6px; transition: background .3s; }
+  .dot.connected { background: #1D9E75; }
+  #player-id { font-weight: 600; color: #fff; }
+  #controller { height: calc(100% - 48px); display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
+  .joystick-wrap { position: relative; width: 160px; height: 160px; }
+  .joystick-base { width: 160px; height: 160px; border-radius: 50%; background: #1e1e1e; border: 2px solid #333; position: absolute; top: 0; left: 0; }
+  .joystick-knob { width: 68px; height: 68px; border-radius: 50%; background: #3a3a3a; border: 2px solid #555; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; transition: background .1s; }
+  .joystick-knob.active { background: #7F77DD; border-color: #AFA9EC; }
+  .action-area { display: flex; flex-direction: column; gap: 16px; align-items: center; }
+  .action-btn { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; cursor: pointer; border: none; touch-action: none; transition: transform .06s; }
+  .action-btn.pressed { transform: scale(0.88); filter: brightness(1.3); }
+  .btn-a { background: #7F77DD; color: #fff; }
+  .btn-b { background: #D4537E; color: #fff; }
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 10; }
+  #overlay.hidden { display: none; }
+  .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #7F77DD; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #overlay p { font-size: 15px; color: #888; }
+</style>
+</head>
+<body>
+<div id="overlay"><div class="spinner"></div><p>서버 연결 중...</p></div>
+<div id="status-bar">
+  <div><span class="dot" id="dot"></span><span id="conn-text">연결 중...</span></div>
+  <div id="player-id"></div>
+</div>
+<div id="controller">
+  <div class="joystick-wrap" id="joystick-wrap">
+    <div class="joystick-base"></div>
+    <div class="joystick-knob" id="knob"></div>
+  </div>
+  <div class="action-area">
+    <div class="action-btn btn-b" id="btn-b">B</div>
+    <div class="action-btn btn-a" id="btn-a">A</div>
+  </div>
+</div>
+<script>
+  const WS_URL = location.protocol === 'https:' ? `wss://${location.host}` : `ws://${location.host}`;
+  let ws;
+  const inputState = { x: 0, y: 0, a: false, b: false };
+  const wrap = document.getElementById('joystick-wrap');
+  const knob = document.getElementById('knob');
+  const MAX_DIST = 80 - 34;
+  let joystickActive = false;
+
+  function getCenter() {
+    const r = wrap.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  function moveKnob(cx, cy) {
+    const c = getCenter();
+    let dx = cx - c.x, dy = cy - c.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist > MAX_DIST) { dx = dx/dist*MAX_DIST; dy = dy/dist*MAX_DIST; }
+    knob.style.left = (80 + dx) + 'px';
+    knob.style.top  = (80 + dy) + 'px';
+    knob.style.transform = 'none';
+    inputState.x = parseFloat((dx / MAX_DIST).toFixed(3));
+    inputState.y = parseFloat((-dy / MAX_DIST).toFixed(3));
+    sendInput();
+  }
+  function resetKnob() {
+    knob.style.cssText = 'width:68px;height:68px;border-radius:50%;background:#3a3a3a;border:2px solid #555;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;';
+    knob.classList.remove('active');
+    inputState.x = 0; inputState.y = 0;
+    sendInput();
+  }
+  wrap.addEventListener('touchstart', (e) => { e.preventDefault(); joystickActive=true; knob.classList.add('active'); moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  wrap.addEventListener('touchmove',  (e) => { e.preventDefault(); if(joystickActive) moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  wrap.addEventListener('touchend',   (e) => { e.preventDefault(); joystickActive=false; resetKnob(); }, {passive:false});
+  wrap.addEventListener('mousedown',  (e) => { joystickActive=true; knob.classList.add('active'); moveKnob(e.clientX, e.clientY); });
+  document.addEventListener('mousemove', (e) => { if(joystickActive) moveKnob(e.clientX, e.clientY); });
+  document.addEventListener('mouseup',   () => { if(joystickActive) { joystickActive=false; resetKnob(); } });
+
+  function setupBtn(id, key) {
+    const el = document.getElementById(id);
+    const press   = (e) => { e.preventDefault(); inputState[key]=true;  el.classList.add('pressed'); sendInput(); };
+    const release = (e) => { e.preventDefault(); inputState[key]=false; el.classList.remove('pressed'); sendInput(); };
+    el.addEventListener('touchstart',  press,   {passive:false});
+    el.addEventListener('touchend',    release, {passive:false});
+    el.addEventListener('touchcancel', release, {passive:false});
+    el.addEventListener('mousedown',  press);
+    el.addEventListener('mouseup',    release);
+    el.addEventListener('mouseleave', release);
+  }
+  setupBtn('btn-a','a'); setupBtn('btn-b','b');
+
+  function sendInput() {
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type:'input', data:{...inputState} }));
+  }
+  function connect() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => ws.send(JSON.stringify({type:'register',role:'controller'}));
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'assigned') {
+        document.getElementById('dot').classList.add('connected');
+        document.getElementById('conn-text').textContent = '연결됨';
+        document.getElementById('player-id').textContent = `P${msg.playerId}`;
+        document.getElementById('overlay').classList.add('hidden');
+      }
+    };
+    ws.onclose = () => { document.getElementById('dot').classList.remove('connected'); document.getElementById('overlay').classList.remove('hidden'); setTimeout(connect,2000); };
+    ws.onerror = () => ws.close();
+  }
+  connect();
+</script>
+</body>
+</html>
