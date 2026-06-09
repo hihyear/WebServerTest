@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>크레인 컨트롤러</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; width: 100%; background: #0f0f0f; color: #fff;
+    font-family: -apple-system, sans-serif; overflow: hidden;
+    user-select: none; -webkit-user-select: none; touch-action: none; }
+
+  /* ── 상태 바 ── */
+  #status-bar { height: 48px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #888; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #444;
+    display: inline-block; margin-right: 6px; transition: background .3s; }
+  .dot.on { background: #1D9E75; }
+
+  /* ── 오버레이 (연결중 / 플레이중 / 게임종료) ── */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; z-index: 20; padding: 32px; text-align: center; }
+  .overlay.hidden { display: none; }
+  .overlay-icon { font-size: 48px; }
+  .overlay-title { font-size: 22px; font-weight: 600; color: #fff; }
+  .overlay-desc { font-size: 14px; color: #888; line-height: 1.6; }
+  .spinner { width: 36px; height: 36px; border: 3px solid #333;
+    border-top-color: #7F77DD; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .retry-btn { margin-top: 8px; padding: 12px 28px; border-radius: 12px;
+    background: #7F77DD; color: #fff; font-size: 15px; font-weight: 600;
+    border: none; cursor: pointer; touch-action: none; }
+  .retry-btn:active { transform: scale(0.95); }
+
+  /* ── 컨트롤러 영역 ── */
+  #controller { height: calc(100% - 48px); display: flex;
+    align-items: center; justify-content: space-between; padding: 0 32px; }
+
+  /* 조이스틱 */
+  .joystick-wrap { position: relative; width: 160px; height: 160px; }
+  .joystick-base { width: 160px; height: 160px; border-radius: 50%;
+    background: #1e1e1e; border: 2px solid #333; position: absolute; }
+  .joystick-knob { width: 68px; height: 68px; border-radius: 50%;
+    background: #3a3a3a; border: 2px solid #555; position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; transition: background .1s; }
+  .joystick-knob.active { background: #7F77DD; border-color: #AFA9EC; }
+
+  /* 크레인 버튼 */
+  .crane-btn {
+    width: 110px; height: 110px; border-radius: 50%;
+    background: #1e1e1e; border: 3px solid #444;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; cursor: pointer; touch-action: none; transition: transform .06s, background .1s;
+  }
+  .crane-btn.pressed { background: #EF9F27; border-color: #BA7517; transform: scale(0.9); }
+  .crane-btn-icon { font-size: 28px; }
+  .crane-btn-label { font-size: 11px; color: #888; }
+  .crane-btn.pressed .crane-btn-label { color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- 연결 중 -->
+<div class="overlay" id="ov-connecting">
+  <div class="spinner"></div>
+  <div class="overlay-title">서버 연결 중...</div>
+</div>
+
+<!-- 플레이 중 안내 -->
+<div class="overlay hidden" id="ov-busy">
+  <div class="overlay-icon">🎮</div>
+  <div class="overlay-title">현재 플레이 중입니다</div>
+  <div class="overlay-desc">다른 사람이 게임을 진행하고 있어요.<br>잠시 후 다시 시도해주세요.</div>
+  <button class="retry-btn" id="retry-btn">다시 시도</button>
+</div>
+
+<!-- 게임 종료 안내 -->
+<div class="overlay hidden" id="ov-end">
+  <div class="overlay-icon">🏆</div>
+  <div class="overlay-title">게임 종료</div>
+  <div class="overlay-desc">플레이해주셔서 감사합니다!</div>
+  <button class="retry-btn" id="restart-btn">다시 하기</button>
+</div>
+
+<!-- 상태 바 -->
+<div id="status-bar">
+  <div><span class="dot" id="dot"></span><span id="conn-text">연결 중...</span></div>
+  <div id="status-right" style="font-size:12px;color:#666">대기 중</div>
+</div>
+
+<!-- 컨트롤러 -->
+<div id="controller">
+  <div class="joystick-wrap" id="joystick-wrap">
+    <div class="joystick-base"></div>
+    <div class="joystick-knob" id="knob"></div>
+  </div>
+
+  <div class="crane-btn" id="crane-btn">
+    <div class="crane-btn-icon">⬇</div>
+    <div class="crane-btn-label">크레인 내리기</div>
+  </div>
+</div>
+
+<script>
+  const WS_URL = location.protocol === 'https:'
+    ? `wss://${location.host}`
+    : `ws://${location.host}`;
+
+  let ws;
+  const input = { x: 0, y: 0, drop: false };
+  const MAX_DIST = 80 - 34;
+  let joystickActive = false;
+
+  // ── 조이스틱 ────────────────────────────
+  const wrap = document.getElementById('joystick-wrap');
+  const knob = document.getElementById('knob');
+
+  function getCenter() {
+    const r = wrap.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  function moveKnob(cx, cy) {
+    const c = getCenter();
+    let dx = cx - c.x, dy = cy - c.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > MAX_DIST) { dx = dx / dist * MAX_DIST; dy = dy / dist * MAX_DIST; }
+    knob.style.left = (80 + dx) + 'px';
+    knob.style.top  = (80 + dy) + 'px';
+    knob.style.transform = 'none';
+    input.x = parseFloat((dx / MAX_DIST).toFixed(3));
+    input.y = parseFloat((-dy / MAX_DIST).toFixed(3));
+    sendInput();
+  }
+
+  function resetKnob() {
+    knob.style.left = '50%'; knob.style.top = '50%';
+    knob.style.transform = 'translate(-50%, -50%)';
+    knob.classList.remove('active');
+    input.x = 0; input.y = 0;
+    sendInput();
+  }
+
+  wrap.addEventListener('touchstart', e => { e.preventDefault(); joystickActive = true; knob.classList.add('active'); moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  wrap.addEventListener('touchmove',  e => { e.preventDefault(); if (joystickActive) moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  wrap.addEventListener('touchend',   e => { e.preventDefault(); joystickActive = false; resetKnob(); }, { passive: false });
+  wrap.addEventListener('mousedown',  e => { joystickActive = true; knob.classList.add('active'); moveKnob(e.clientX, e.clientY); });
+  document.addEventListener('mousemove', e => { if (joystickActive) moveKnob(e.clientX, e.clientY); });
+  document.addEventListener('mouseup',   () => { if (joystickActive) { joystickActive = false; resetKnob(); } });
+
+  // ── 크레인 버튼 ─────────────────────────
+  const craneBtn = document.getElementById('crane-btn');
+  const pressDown   = e => { e.preventDefault(); input.drop = true;  craneBtn.classList.add('pressed'); sendInput(); };
+  const pressUp     = e => { e.preventDefault(); input.drop = false; craneBtn.classList.remove('pressed'); sendInput(); };
+  craneBtn.addEventListener('touchstart',  pressDown, { passive: false });
+  craneBtn.addEventListener('touchend',    pressUp,   { passive: false });
+  craneBtn.addEventListener('touchcancel', pressUp,   { passive: false });
+  craneBtn.addEventListener('mousedown',   pressDown);
+  craneBtn.addEventListener('mouseup',     pressUp);
+  craneBtn.addEventListener('mouseleave',  pressUp);
+
+  // ── 입력 전송 ────────────────────────────
+  function sendInput() {
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'input', data: { ...input } }));
+  }
+
+  // ── UI 상태 관리 ─────────────────────────
+  function showOverlay(id) {
+    ['ov-connecting', 'ov-busy', 'ov-end'].forEach(n => {
+      document.getElementById(n).classList.toggle('hidden', n !== id);
+    });
+  }
+  function hideOverlays() {
+    ['ov-connecting', 'ov-busy', 'ov-end'].forEach(n =>
+      document.getElementById(n).classList.add('hidden'));
+  }
+
+  // ── WebSocket 연결 ───────────────────────
+  function connect() {
+    showOverlay('ov-connecting');
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      document.getElementById('dot').classList.add('on');
+      document.getElementById('conn-text').textContent = '연결됨';
+      ws.send(JSON.stringify({ type: 'register', role: 'controller' }));
+    };
+
+    ws.onmessage = e => {
+      const msg = JSON.parse(e.data);
+
+      if (msg.type === 'game_start') {
+        hideOverlays();
+        document.getElementById('status-right').textContent = '🎮 플레이 중';
+        document.getElementById('status-right').style.color = '#1D9E75';
+      }
+
+      if (msg.type === 'game_busy') {
+        showOverlay('ov-busy');
+      }
+
+      if (msg.type === 'game_end') {
+        showOverlay('ov-end');
+        document.getElementById('status-right').textContent = '대기 중';
+        document.getElementById('status-right').style.color = '#666';
+      }
+    };
+
+    ws.onclose = () => {
+      document.getElementById('dot').classList.remove('on');
+      document.getElementById('conn-text').textContent = '연결 끊김';
+      showOverlay('ov-connecting');
+      setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  // 다시 시도 버튼
+  document.getElementById('retry-btn').addEventListener('click', () => {
+    if (ws) ws.close();
+    connect();
+  });
+  document.getElementById('restart-btn').addEventListener('click', () => {
+    if (ws) ws.close();
+    connect();
+  });
+
+  connect();
+</script>
+</body>
+</html>
