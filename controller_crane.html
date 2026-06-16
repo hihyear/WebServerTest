@@ -214,6 +214,10 @@
     connect();
   });
 
+  window.addEventListener('pagehide', () => {
+     if (ws) ws.close();
+   });
+
   connect();
 </script>
 </body>
