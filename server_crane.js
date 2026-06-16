@@ -27,7 +27,15 @@ const httpServer = http.createServer((req, res) => {
 // ── WebSocket 서버 ─────────────────────────
 const wss = new WebSocketServer({ server: httpServer });
 
+function heartbeat() {
+  this.isAlive = true;
+}
+
 wss.on('connection', (ws) => {
+
+  // ── 하트비트 초기화 ──
+  ws.isAlive = true;
+  ws.on('pong', heartbeat);
 
   ws.on('message', (data) => {
     try {
@@ -108,6 +116,24 @@ function broadcast(clients, data) {
   const msg = JSON.stringify(data);
   clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
 }
+
+// ── 하트비트 체크 (5초마다) ─────────────────
+// 응답 없는 연결(비정상 종료된 클라이언트)을 강제로 끊어서
+// close 이벤트를 발생시키고 게임 상태를 즉시 정리한다.
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log('[!] 응답 없는 연결 강제 종료');
+      return ws.terminate();   // → 'close' 이벤트 발생 → 기존 정리 로직 실행
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 5000);
+
+wss.on('close', () => {
+  clearInterval(heartbeatInterval);
+});
 
 // ── 서버 시작 ──────────────────────────────
 function getLocalIP() {
