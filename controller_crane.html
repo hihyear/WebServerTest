@@ -37,14 +37,15 @@
   #controller { height: calc(100% - 48px); display: flex;
     align-items: center; justify-content: space-between; padding: 0 32px; }
 
-  /* 조이스틱 */
-  .joystick-wrap { position: relative; width: 160px; height: 160px; }
-  .joystick-base { width: 160px; height: 160px; border-radius: 50%;
-    background: #1e1e1e; border: 2px solid #333; position: absolute; }
-  .joystick-knob { width: 68px; height: 68px; border-radius: 50%;
-    background: #3a3a3a; border: 2px solid #555; position: absolute;
-    top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; transition: background .1s; }
-  .joystick-knob.active { background: #7F77DD; border-color: #AFA9EC; }
+  /* 방향 D패드 */
+  .dpad { display: grid; grid-template-columns: repeat(3, 64px);
+    grid-template-rows: repeat(3, 64px); gap: 6px; }
+  .dpad-btn { width: 64px; height: 64px; border-radius: 14px;
+    background: #1e1e1e; border: 1px solid #333; display: flex;
+    align-items: center; justify-content: center; font-size: 24px;
+    color: #ccc; cursor: pointer; touch-action: none; transition: background .08s, transform .06s; }
+  .dpad-btn.pressed { background: #7F77DD; color: #fff; transform: scale(0.92); }
+  .dpad-empty { background: transparent !important; border: none !important; pointer-events: none; }
 
   /* 크레인 버튼 */
   .crane-btn {
@@ -91,9 +92,16 @@
 
 <!-- 컨트롤러 -->
 <div id="controller">
-  <div class="joystick-wrap" id="joystick-wrap">
-    <div class="joystick-base"></div>
-    <div class="joystick-knob" id="knob"></div>
+  <div class="dpad" id="dpad">
+    <div class="dpad-empty"></div>
+    <div class="dpad-btn" id="btn-up">↑</div>
+    <div class="dpad-empty"></div>
+    <div class="dpad-btn" id="btn-left">←</div>
+    <div class="dpad-empty"></div>
+    <div class="dpad-btn" id="btn-right">→</div>
+    <div class="dpad-empty"></div>
+    <div class="dpad-btn" id="btn-down">↓</div>
+    <div class="dpad-empty"></div>
   </div>
 
   <div class="crane-btn" id="crane-btn">
@@ -109,45 +117,23 @@
 
   let ws;
   const input = { x: 0, y: 0, drop: false };
-  const MAX_DIST = 80 - 34;
-  let joystickActive = false;
 
-  // ── 조이스틱 ────────────────────────────
-  const wrap = document.getElementById('joystick-wrap');
-  const knob = document.getElementById('knob');
-
-  function getCenter() {
-    const r = wrap.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  // ── 방향 D패드 ───────────────────────────
+  function setupDpad(id, axis, value) {
+    const el = document.getElementById(id);
+    const press   = e => { e.preventDefault(); input[axis] = value; el.classList.add('pressed'); sendInput(); };
+    const release = e => { e.preventDefault(); input[axis] = 0;     el.classList.remove('pressed'); sendInput(); };
+    el.addEventListener('touchstart',  press,   { passive: false });
+    el.addEventListener('touchend',    release, { passive: false });
+    el.addEventListener('touchcancel', release, { passive: false });
+    el.addEventListener('mousedown',   press);
+    el.addEventListener('mouseup',     release);
+    el.addEventListener('mouseleave',  release);
   }
-
-  function moveKnob(cx, cy) {
-    const c = getCenter();
-    let dx = cx - c.x, dy = cy - c.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > MAX_DIST) { dx = dx / dist * MAX_DIST; dy = dy / dist * MAX_DIST; }
-    knob.style.left = (80 + dx) + 'px';
-    knob.style.top  = (80 + dy) + 'px';
-    knob.style.transform = 'none';
-    input.x = parseFloat((dx / MAX_DIST).toFixed(3));
-    input.y = parseFloat((-dy / MAX_DIST).toFixed(3));
-    sendInput();
-  }
-
-  function resetKnob() {
-    knob.style.left = '50%'; knob.style.top = '50%';
-    knob.style.transform = 'translate(-50%, -50%)';
-    knob.classList.remove('active');
-    input.x = 0; input.y = 0;
-    sendInput();
-  }
-
-  wrap.addEventListener('touchstart', e => { e.preventDefault(); joystickActive = true; knob.classList.add('active'); moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-  wrap.addEventListener('touchmove',  e => { e.preventDefault(); if (joystickActive) moveKnob(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-  wrap.addEventListener('touchend',   e => { e.preventDefault(); joystickActive = false; resetKnob(); }, { passive: false });
-  wrap.addEventListener('mousedown',  e => { joystickActive = true; knob.classList.add('active'); moveKnob(e.clientX, e.clientY); });
-  document.addEventListener('mousemove', e => { if (joystickActive) moveKnob(e.clientX, e.clientY); });
-  document.addEventListener('mouseup',   () => { if (joystickActive) { joystickActive = false; resetKnob(); } });
+  setupDpad('btn-up',    'y',  1);
+  setupDpad('btn-down',  'y', -1);
+  setupDpad('btn-left',  'x', -1);
+  setupDpad('btn-right', 'x',  1);
 
   // ── 크레인 버튼 ─────────────────────────
   const craneBtn = document.getElementById('crane-btn');
