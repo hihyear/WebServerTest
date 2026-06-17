@@ -107,7 +107,14 @@ wss.on('connection', (ws) => {
 
 function endGame(reason) {
   gameState = 'idle';
+
+  // 현재 플레이어에게 종료 알림 후 연결 강제 종료
+  if (currentPlayer && currentPlayer.readyState === 1) {
+    currentPlayer.send(JSON.stringify({ type: 'game_end', reason }));
+    currentPlayer.close();
+  }
   currentPlayer = null;
+
   broadcast(gameClients, { type: 'game_end', reason });
   console.log(`[게임 종료] reason: ${reason}`);
 }
