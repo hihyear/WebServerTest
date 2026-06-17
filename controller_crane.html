@@ -17,6 +17,14 @@
     display: inline-block; margin-right: 6px; transition: background .3s; }
   .dot.on { background: #1D9E75; }
 
+  /* ── 카운트다운 배지 ── */
+  #countdown-wrap { position: fixed; top: 58px; left: 0; right: 0;
+    display: flex; justify-content: center; z-index: 5; pointer-events: none; }
+  #countdown-wrap.hidden { display: none; }
+  #countdown { background: #1a1a1a; border: 2px solid #7F77DD; border-radius: 999px;
+    padding: 6px 22px; font-size: 20px; font-weight: 700; color: #fff; }
+  #countdown.urgent { border-color: #D4537E; color: #D4537E; }
+
   /* ── 오버레이 (연결중 / 플레이중 / 게임종료) ── */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -90,6 +98,11 @@
   <div id="status-right" style="font-size:12px;color:#666">대기 중</div>
 </div>
 
+<!-- 카운트다운 -->
+<div id="countdown-wrap" class="hidden">
+  <div id="countdown">10</div>
+</div>
+
 <!-- 컨트롤러 -->
 <div id="controller">
   <div class="dpad" id="dpad">
@@ -117,6 +130,8 @@
 
   let ws;
   const input = { x: 0, y: 0, drop: false };
+  let countdownInterval = null;
+  let intentionalClose = false;   // 정상적인 라운드 종료로 인한 닫힘인지 구분
 
   // ── 방향 D패드 ───────────────────────────
   function setupDpad(id, axis, value) {
@@ -152,6 +167,32 @@
       ws.send(JSON.stringify({ type: 'input', data: { ...input } }));
   }
 
+  // ── 카운트다운 ───────────────────────────
+  function startCountdown(seconds) {
+    stopCountdown();
+    let remaining = seconds;
+    const el = document.getElementById('countdown');
+    const wrap = document.getElementById('countdown-wrap');
+    el.textContent = remaining;
+    el.classList.remove('urgent');
+    wrap.classList.remove('hidden');
+
+    countdownInterval = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 3) el.classList.add('urgent');
+      if (remaining <= 0) {
+        stopCountdown();
+        return;
+      }
+      el.textContent = remaining;
+    }, 1000);
+  }
+  function stopCountdown() {
+    if (countdownInterval) clearInterval(countdownInterval);
+    countdownInterval = null;
+    document.getElementById('countdown-wrap').classList.add('hidden');
+  }
+
   // ── UI 상태 관리 ─────────────────────────
   function showOverlay(id) {
     ['ov-connecting', 'ov-busy', 'ov-end'].forEach(n => {
@@ -181,6 +222,7 @@
         hideOverlays();
         document.getElementById('status-right').textContent = '🎮 플레이 중';
         document.getElementById('status-right').style.color = '#1D9E75';
+        startCountdown(10);
       }
 
       if (msg.type === 'game_busy') {
@@ -188,6 +230,8 @@
       }
 
       if (msg.type === 'game_end') {
+        stopCountdown();
+        intentionalClose = true;   // 서버가 곧 연결을 닫을 예정 → 자동 재연결 방지
         showOverlay('ov-end');
         document.getElementById('status-right').textContent = '대기 중';
         document.getElementById('status-right').style.color = '#666';
@@ -197,6 +241,14 @@
     ws.onclose = () => {
       document.getElementById('dot').classList.remove('on');
       document.getElementById('conn-text').textContent = '연결 끊김';
+      stopCountdown();
+
+      if (intentionalClose) {
+        // 정상적인 라운드 종료 — 자동 재연결 안 함, ov-end 화면 유지
+        intentionalClose = false;
+        return;
+      }
+
       showOverlay('ov-connecting');
       setTimeout(connect, 2000);
     };
@@ -214,9 +266,10 @@
     connect();
   });
 
+  // 탭을 닫거나 페이지를 떠날 때 서버에 즉시 종료 신호 전달
   window.addEventListener('pagehide', () => {
-     if (ws) ws.close();
-   });
+    if (ws) ws.close();
+  });
 
   connect();
 </script>
